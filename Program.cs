@@ -1,263 +1,327 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Data.SQLite;
-using System.Drawing;
+using System.Data.Entity;
+using System.Linq;
+using System.Reflection.Emit;
+using Microsoft.EntityFrameworkCore;
 
 class Program
 {
+    static char drawCharacter = '█';
+    static ConsoleColor drawColor = ConsoleColor.White;
+    static int x = Console.WindowWidth / 2;
+    static int y = Console.WindowHeight / 2;
+    static bool exit = false;
+    static bool inDrawingMode = false;
+
+    static string[] menuOptions = { "Új rajz", "Szerkesztés", "Törlés", "Kilépés" };
+    static int selectedIndex = 0;
+
+    static List<Point> rajz = new List<Point>();
+
     static void Main()
     {
         Console.CursorVisible = false;
-        char currentChar = '█';
-        ConsoleColor currentColor = ConsoleColor.White;
+        using (var context = new DrawingContext())
+        {
+            context.Database.Migrate();
+        }
 
-        int startX = 20, startY = 10;
-        int x = startX, y = startY;
+        ShowMainMenu();
+        while (!exit)
+        {
+            if (inDrawingMode)
+            {
+                DrawingMode();
+            }
+            else
+            {
+                ShowMainMenu();
+            }
+        }
+    }
 
-        int borderX1 = 10;
-        int borderY1 = 5;
-        int borderX2 = 110;
-        int borderY2 = 25;
+    static void ShowMainMenu()
+    {
+        DrawMenuBorder();
+        ShowMenu(menuOptions, selectedIndex);
+        while (!inDrawingMode && !exit)
+        {
+            var key = Console.ReadKey(true);
 
-        
-        InitializeDatabase();
+            if (key.Key == ConsoleKey.UpArrow && selectedIndex > 0) selectedIndex--;
+            else if (key.Key == ConsoleKey.DownArrow && selectedIndex < menuOptions.Length - 1) selectedIndex++;
+            else if (key.Key == ConsoleKey.Enter)
+            {
+                switch (selectedIndex)
+                {
+                    case 0:
+                        NewDrawing();
+                        break;
+                    case 1:
+                        EditDrawing();
+                        break;
+                    case 2:
+                        DeleteDrawing();
+                        break;
+                    case 3:
+                        exit = true;
+                        break;
+                }
+            }
+            DrawMenuBorder();
+            ShowMenu(menuOptions, selectedIndex);
+        }
+    }
 
-        BorderLine(borderX1, borderY1, borderX2, borderY2, '█', ConsoleColor.Red);
+    static void NewDrawing()
+    {
+        rajz.Clear();
+        x = Console.WindowWidth / 2;
+        y = Console.WindowHeight / 2;
+        inDrawingMode = true;
+        Console.Clear();
+    }
 
-        List<(int x, int y, char c, ConsoleColor color)> currentDrawing = new List<(int, int, char, ConsoleColor)>();
+    static void EditDrawing()
+    {
+        using (var context = new DrawingContext())
+        {
+            var drawings = context.Drawings.Include(d => d.Points).ToArray();
+            if (drawings.Length == 0)
+            {
+                Console.Clear();
+                Console.WriteLine("Nincs elérhető rajz a szerkesztéshez.");
+                Console.ReadKey();
+                return;
+            }
 
+            var selectedDrawing = SelectDrawing(drawings);
+            LoadDrawing(selectedDrawing);
+            inDrawingMode = true;
+            Console.Clear();
+        }
+    }
+
+    static void DeleteDrawing()
+    {
+        using (var context = new DrawingContext())
+        {
+            var drawings = context.Drawings.ToArray();
+            if (drawings.Length == 0)
+            {
+                Console.Clear();
+                Console.WriteLine("Nincs elérhető rajz a törléshez.");
+                Console.ReadKey();
+                return;
+            }
+
+            var selectedDrawing = SelectDrawing(drawings);
+            context.Drawings.Remove(selectedDrawing);
+            context.SaveChanges();
+            Console.Clear();
+            Console.WriteLine("A fájl törölve lett.");
+            Console.ReadKey();
+        }
+    }
+
+    static Drawing SelectDrawing(Drawing[] drawings)
+    {
+        int drawingIndex = 0;
         while (true)
         {
-            Console.SetCursorPosition(x, y);
-            Console.ForegroundColor = currentColor;
-            Console.Write(currentChar);
-            Console.ResetColor();
-
-            currentDrawing.Add((x, y, currentChar, currentColor));
-
-            var key = Console.ReadKey(true);
-
-            if (key.Key == ConsoleKey.Escape)
-            {
-                break;
-            }
-
-            switch (key.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    if (y > borderY1 + 1) y--;
-                    break;
-                case ConsoleKey.DownArrow:
-                    if (y < borderY2 - 1) y++;
-                    break;
-                case ConsoleKey.LeftArrow:
-                    if (x > borderX1 + 1) x--;
-                    break;
-                case ConsoleKey.RightArrow:
-                    if (x < borderX2 - 1) x++;
-                    break;
-
-                case ConsoleKey.D1:
-                    currentColor = ConsoleColor.White;
-                    break;
-                case ConsoleKey.D2:
-                    currentColor = ConsoleColor.Black;
-                    break;
-                case ConsoleKey.D3:
-                    currentColor = ConsoleColor.Blue;
-                    break;
-                case ConsoleKey.D4:
-                    currentColor = ConsoleColor.Yellow;
-                    break;
-                case ConsoleKey.D5:
-                    currentColor = ConsoleColor.Magenta;
-                    break;
-                case ConsoleKey.D6:
-                    currentColor = ConsoleColor.Cyan;
-                    break;
-
-                case ConsoleKey.C:
-                    Console.Clear();
-                    SaveDrawing(currentDrawing);  
-                    currentDrawing.Clear();
-                    currentColor = ConsoleColor.White;
-                    BorderLine(borderX1, borderY1, borderX2, borderY2, '█', ConsoleColor.Red);
-
-                    x = startX;
-                    y = startY;
-                    break;
-
-                case ConsoleKey.R:
-                    List<int> drawingIds = GetSavedDrawingIds();
-                    if (drawingIds.Count > 0)
-                    {
-                        int selectedDrawing = SelectDrawing(drawingIds);
-                        Console.Clear();
-                        List<(int x, int y, char c, ConsoleColor color)> loadedDrawing = LoadDrawing(selectedDrawing);
-                        foreach (var pixel in loadedDrawing)
-                        {
-                            Console.SetCursorPosition(pixel.x, pixel.y);
-                            Console.ForegroundColor = pixel.color;
-                            Console.Write(pixel.c);
-                        }
-                        currentDrawing = new List<(int, int, char, ConsoleColor)>(loadedDrawing);
-                        BorderLine(borderX1, borderY1, borderX2, borderY2, '█', ConsoleColor.Red);
-                    }
-                    break;
-
-                default:
-                    break;
-            }
-        }
-    }
-
-    static void InitializeDatabase()
-    {
-        using (var connection = new SQLiteConnection("Data Source=drawings.db;Version=3;"))
-        {
-            connection.Open();
-            string createTableQuery = @"
-                CREATE TABLE IF NOT EXISTS Drawings (
-                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    X INTEGER,
-                    Y INTEGER,
-                    Char TEXT,
-                    Color INTEGER
-                );
-            ";
-            using (var command = new SQLiteCommand(createTableQuery, connection))
-            {
-                command.ExecuteNonQuery();
-            }
-        }
-    }
-
-    static void SaveDrawing(List<(int x, int y, char c, ConsoleColor color)> drawing)
-    {
-        using (var connection = new SQLiteConnection("Data Source=drawings.db;Version=3;"))
-        {
-            connection.Open();
-            foreach (var pixel in drawing)
-            {
-                string insertQuery = "INSERT INTO Drawings (X, Y, Char, Color) VALUES (@X, @Y, @Char, @Color)";
-                using (var command = new SQLiteCommand(insertQuery, connection))
-                {
-                    command.Parameters.AddWithValue("@X", pixel.x);
-                    command.Parameters.AddWithValue("@Y", pixel.y);
-                    command.Parameters.AddWithValue("@Char", pixel.c.ToString());
-                    command.Parameters.AddWithValue("@Color", (int)pixel.color);
-                    command.ExecuteNonQuery();
-                }
-            }
-        }
-    }
-
-    static List<int> GetSavedDrawingIds()
-    {
-        var drawingIds = new List<int>();
-        using (var connection = new SQLiteConnection("Data Source=drawings.db;Version=3;"))
-        {
-            connection.Open();
-            string query = "SELECT DISTINCT Id FROM Drawings";
-            using (var command = new SQLiteCommand(query, connection))
-            {
-                using (var reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        drawingIds.Add(reader.GetInt32(0));
-                    }
-                }
-            }
-        }
-        return drawingIds;
-    }
-
-    static List<(int x, int y, char c, ConsoleColor color)> LoadDrawing(int drawingId)
-    {
-        var drawing = new List<(int, int, char, ConsoleColor)>();
-        using (var connection = new SQLiteConnection("Data Source=drawings.db;Version=3;"))
-        {
-            connection.Open();
-            string query = "SELECT X, Y, Char, Color FROM Drawings WHERE Id = @Id";
-            using (var command = new SQLiteCommand(query, connection))
-            {
-                command.Parameters.AddWithValue("@Id", drawingId);
-                using (var reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        int x = reader.GetInt32(0);
-                        int y = reader.GetInt32(1);
-                        char c = reader.GetString(2)[0];
-                        ConsoleColor color = (ConsoleColor)reader.GetInt32(3);
-                        drawing.Add((x, y, c, color));
-                    }
-                }
-            }
-        }
-        return drawing;
-    }
-
-    static int SelectDrawing(List<int> drawingIds)
-    {
-        int selectedIndex = 0;
-        bool choosing = true;
-
-        while (choosing)
-        {
             Console.Clear();
-
-            for (int i = 0; i < drawingIds.Count; i++)
+            Console.WriteLine("Válassz egy rajzot:");
+            for (int i = 0; i < drawings.Length; i++)
             {
-                if (i == selectedIndex)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"Drawing {drawingIds[i]}");
-                }
+                if (i == drawingIndex)
+                    Console.ForegroundColor = ConsoleColor.DarkGreen;
                 else
-                {
                     Console.ResetColor();
-                    Console.WriteLine($"Drawing {drawingIds[i]}");
-                }
+                Console.WriteLine($"Rajz {i + 1}: {drawings[i].Name}");
             }
 
             var key = Console.ReadKey(true);
-            switch (key.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    if (selectedIndex > 0) selectedIndex--;
-                    break;
-                case ConsoleKey.DownArrow:
-                    if (selectedIndex < drawingIds.Count - 1) selectedIndex++;
-                    break;
-                case ConsoleKey.Enter:
-                    choosing = false;
-                    break;
-            }
+            if (key.Key == ConsoleKey.UpArrow && drawingIndex > 0) drawingIndex--;
+            else if (key.Key == ConsoleKey.DownArrow && drawingIndex < drawings.Length - 1) drawingIndex++;
+            else if (key.Key == ConsoleKey.Enter)
+                return drawings[drawingIndex];
         }
-
-        return drawingIds[selectedIndex];
     }
 
-    static void BorderLine(int x1, int y1, int x2, int y2, char borderChar, ConsoleColor color)
+    static void LoadDrawing(Drawing drawing)
     {
-        Console.ForegroundColor = color;
+        rajz.AddRange(drawing.Points);
+        RedrawSavedDrawing();
+    }
 
-        for (int x = x1; x <= x2; x++)
+    static void SaveDrawing(string fileName)
+    {
+        using (var context = new DrawingContext())
         {
-            Console.SetCursorPosition(x, y1);
-            Console.Write(borderChar);
-            Console.SetCursorPosition(x, y2);
-            Console.Write(borderChar);
+            var newDrawing = new Drawing
+            {
+                Name = fileName,
+                Points = new List<Point>()
+            };
+
+            foreach (var point in rajz)
+            {
+                if (!newDrawing.Points.Any(p => p.Id == point.Id))
+                {
+                    newDrawing.Points.Add(point);
+                }
+            }
+
+            context.Drawings.Add(newDrawing);
+            context.SaveChanges();
+        }
+    }
+
+    static void DrawingMode()
+    {
+        bool drawing = true;
+        Console.Clear();
+
+        while (drawing)
+        {
+            RedrawSavedDrawing();
+            var key = Console.ReadKey(true);
+
+            if (key.Key == ConsoleKey.Spacebar)
+            {
+                Console.SetCursorPosition(x, y);
+                Console.ForegroundColor = drawColor;
+                Console.Write(drawCharacter);
+                Console.ResetColor();
+                rajz.Add(new Point { X = x, Y = y, Character = drawCharacter, Color = drawColor });
+            }
+            else if (key.Key == ConsoleKey.Escape)
+            {
+                Console.Clear();
+                Console.Write("Add meg a mentés nevét: ");
+                string fileName = Console.ReadLine();
+                SaveDrawing(fileName);
+                drawing = false;
+                inDrawingMode = false;
+                Console.Clear();
+            }
+            else if (key.Key == ConsoleKey.F1) drawCharacter = '█';
+            else if (key.Key == ConsoleKey.F2) drawCharacter = '▓';
+            else if (key.Key == ConsoleKey.F3) drawCharacter = '▒';
+            else if (key.Key == ConsoleKey.F4) drawCharacter = '░';
+            else if (key.Key >= ConsoleKey.D0 && key.Key <= ConsoleKey.D9) drawColor = (ConsoleColor)(key.Key - ConsoleKey.D0);
+            else MoveCursor(ref x, ref y, key);
+        }
+    }
+
+    static void RedrawSavedDrawing()
+    {
+        foreach (var point in rajz)
+        {
+            Console.SetCursorPosition(point.X, point.Y);
+            Console.ForegroundColor = point.Color;
+            Console.Write(point.Character);
+        }
+        Console.ResetColor();
+    }
+
+    static void MoveCursor(ref int x, ref int y, ConsoleKeyInfo key)
+    {
+        switch (key.Key)
+        {
+            case ConsoleKey.LeftArrow: if (x > 1) x--; break;
+            case ConsoleKey.RightArrow: if (x < Console.WindowWidth - 2) x++; break;
+            case ConsoleKey.UpArrow: if (y > 1) y--; break;
+            case ConsoleKey.DownArrow: if (y < Console.WindowHeight - 2) y++; break;
+        }
+    }
+
+    static void ShowMenu(string[] options, int selectedIndex)
+    {
+        int startY = Console.WindowHeight / 2 - options.Length / 2;
+        for (int i = 0; i < options.Length; i++)
+        {
+            Console.SetCursorPosition(Console.WindowWidth / 2 - options[i].Length / 2, startY + i);
+            if (i == selectedIndex)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGreen;
+                Console.WriteLine(options[i]);
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.WriteLine(options[i]);
+            }
+        }
+    }
+
+    static void DrawMenuBorder()
+    {
+        int menuWidth = 24;
+        int menuHeight = menuOptions.Length + 2;
+        int startX = Console.WindowWidth / 2 - menuWidth / 2;
+        int startY = Console.WindowHeight / 2 - menuHeight / 2;
+
+        Console.SetCursorPosition(startX, startY);
+        Console.Write("╔");
+        for (int i = 0; i < menuWidth - 2; i++) Console.Write("═");
+        Console.Write("╗");
+
+        for (int i = 1; i < menuHeight - 1; i++)
+        {
+            Console.SetCursorPosition(startX, startY + i);
+            Console.Write("║");
+            Console.SetCursorPosition(startX + menuWidth - 1, startY + i);
+            Console.Write("║");
         }
 
-        for (int y = y1; y <= y2; y++)
-        {
-            Console.SetCursorPosition(x1, y);
-            Console.Write(borderChar);
-            Console.SetCursorPosition(x2, y);
-            Console.Write(borderChar);
-        }
+        Console.SetCursorPosition(startX, startY + menuHeight - 1);
+        Console.Write("╚");
+        for (int i = 0; i < menuWidth - 2; i++) Console.Write("═");
+        Console.Write("╝");
+    }
+}
+
+public class Drawing
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public List<Point> Points { get; set; } = new List<Point>();
+}
+
+public class Point
+{
+    public int Id { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+    public char Character { get; set; }
+    public ConsoleColor Color { get; set; }
+    public int DrawingId { get; set; }
+}
+
+public class DrawingContext : DbContext
+{
+    public DbSet<Drawing> Drawings { get; set; }
+    public DbSet<Point> Points { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.UseSqlite("Data Source=drawings.db");
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Drawing>()
+            .HasKey(d => d.Id);
+
+        modelBuilder.Entity<Point>()
+            .HasKey(p => p.Id);
+
+        modelBuilder.Entity<Drawing>()
+            .HasMany(d => d.Points)
+            .WithOne()
+            .HasForeignKey(p => p.DrawingId) 
+            .OnDelete(DeleteBehavior.Cascade); 
     }
 }
